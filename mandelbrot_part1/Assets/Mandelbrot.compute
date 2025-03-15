@@ -1,0 +1,77 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel Mandelbrot
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> result;
+
+// Size of the image in pixels.
+float width;
+float height;
+// Reference point of the image (center)
+float img_real;
+float img_imag;
+// How big each pixel is in complex units.
+float pixel_size;
+
+// For each point C calculate if it is within the set within the iteration limit.
+uint mandelbrot_iterations(double c_real, double c_imag, uint max_iter) {
+  double z_real = 0;
+  double z_imag = 0;
+
+  // Save the values to avoid computing them from one iteration to the next.
+  double zr_squared = 0;
+  double zi_squared = 0;
+
+  uint iter;
+
+  for (iter = 0; iter < max_iter; iter++) {
+    // Update: z = z^2 + c
+    // Complex multiplication: (a + ib) (c + id) = (ac - bd) + i(ad + bc).
+    // z^2: (zr + i zi)(zr + i zi) = (zr^2 - zi^2) + i (2 * (zr * zi))
+    
+    // Do imaginary part first as this involves zr.
+    // imaginary part: 2 * (zr * zi)
+    z_imag = z_real * z_imag;
+    z_imag += z_imag; // + is cheaper than *2
+    z_imag += c_imag;
+
+    // real part: zr^2 - zi^2
+    z_real = (zr_squared - zi_squared) + c_real;
+
+    //    Exit condition: abs(z) <= 2
+    //            Expand: sqrt(real^2 + imag^2) <= 2
+    // Square both sides: real^2 + imag^2 <= 4
+    // This avoids a costly square root.
+    zr_squared = z_real * z_real;
+    zi_squared = z_imag * z_imag;
+
+    if (zr_squared + zi_squared > 4.0) {
+      // Conditionals generally bad in shader code, but we'll have regions
+      // where they are all not in the set so this isn't the end of the world.
+      break;
+    }
+  }
+
+  // We return how many iterations before this point is in the set.
+  return iter;
+}
+
+[numthreads(8,8,1)]
+void Mandelbrot (uint3 id : SV_DispatchThreadID) {
+  // Convert our GPU index into the correct offset based on the zoom.
+  double offset_real = ((double)id.x - (width / 2)) * pixel_size;
+  double offset_imag = ((double)id.y - (height / 2)) * pixel_size;
+
+  // The point we want to calculate is then our base image coords plus the offset.
+  double real = img_real + offset_real;
+  double imag = img_imag + offset_imag;
+
+  // Calculate how many iterations it takes to determine if not in the Mandelbrot set.
+  uint total_iterations = 32;
+  uint iterations_for_exclusion = mandelbrot_iterations(real, imag, total_iterations);
+
+  // Return a greyscale based on the number of iterations to calculate this point.
+  float shade = 1 - ((float) iterations_for_exclusion / total_iterations);
+  result[id.xy] = float4(shade, shade, shade, 1);
+}
